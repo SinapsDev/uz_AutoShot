@@ -20,6 +20,17 @@ Customize.WaitAfterCapture  = 300           -- ms
 Customize.TextureLoadWait   = 600           -- ms
 Customize.CaptureAllTextures = false        -- true = all textures, false = texture 0 only
 
+-- Which ped genders to capture clothing/props/overlays/tattoos for. Many items are
+-- gender-specific (different drawable counts, ~59 gender-exclusive tattoos), so a full
+-- catalog needs both. When set to capture more than one, the freemode ped model is
+-- swapped between passes automatically and each gender is written to shots/<gender>/.
+-- Your own character's model + outfit is saved and restored afterwards.
+--   'both'    = capture male AND female in one run (default)
+--   'current' = only the gender you currently are
+--   'male' / 'female' = force a single gender
+-- (Vehicles/objects are gender-independent and always captured once.)
+Customize.CaptureGenders    = 'both'
+
 -- Batch / Performance
 Customize.BatchSize         = 10
 Customize.BatchPauseWait    = 2000          -- ms
@@ -90,6 +101,17 @@ Customize.CameraPresets = {
     bracelets       = { fov = 21.7, zPos = -0.19, rotation = vector3(0.0, 0.0, 0.0),   dist = 1.0, defaultAngleH = -275.6, defaultCamZ = 0.5,  defaultRoll = 0.0 },
     vehicle         = { fov = 40.0, zPos = 0.81,  rotation = vector3(0.0, 0.0, 0.0),   dist = 8.0, defaultAngleH = 399.4,  defaultCamZ = 1.82, defaultRoll = 0.0 },
     object          = { fov = 35.0, zPos = 0.42,  rotation = vector3(0.0, 0.0, 0.0),   dist = 3.7, defaultAngleH = 211.8,  defaultCamZ = 0.83, defaultRoll = 0.0 },
+    -- Tattoo zones (starting points — fine-tune live with the studio camera + "Save Camera Angle").
+    -- Torso shows the front by default; drag to rotate for back tattoos. Arms/legs are angled to each side.
+    tattoo_torso    = { fov = 37.7, zPos = 0.31,  rotation = vector3(0.0, 0.0, 0.0),   dist = 1.3, defaultAngleH = 180.0,  defaultCamZ = 0.0,  defaultRoll = 0.0 },
+    tattoo_arm_left = { fov = 45.0, zPos = 0.22,  rotation = vector3(0.0, 0.0, 0.0),   dist = 0.9, defaultAngleH = 135.0,  defaultCamZ = 0.1,  defaultRoll = 0.0 },
+    tattoo_arm_right= { fov = 45.0, zPos = 0.22,  rotation = vector3(0.0, 0.0, 0.0),   dist = 0.9, defaultAngleH = 225.0,  defaultCamZ = 0.1,  defaultRoll = 0.0 },
+    tattoo_leg_left = { fov = 45.0, zPos = -0.45, rotation = vector3(0.0, 0.0, 0.0),   dist = 1.2, defaultAngleH = 150.0,  defaultCamZ = 0.1,  defaultRoll = 0.0 },
+    tattoo_leg_right= { fov = 45.0, zPos = -0.45, rotation = vector3(0.0, 0.0, 0.0),   dist = 1.2, defaultAngleH = 210.0,  defaultCamZ = 0.1,  defaultRoll = 0.0 },
+    tattoo_head     = { fov = 28.0, zPos = 0.55,  rotation = vector3(0.0, 0.0, 0.0),   dist = 1.2, defaultAngleH = 180.0,  defaultCamZ = 0.0,  defaultRoll = 0.0 },
+    -- Rear torso view (defaultAngleH 0 = opposite of the 180 front shot). Used by the torso
+    -- auto front/back pass; tune this to frame back tattoos nicely.
+    tattoo_back     = { fov = 37.7, zPos = 0.31,  rotation = vector3(0.0, 0.0, 0.0),   dist = 1.3, defaultAngleH = 0.0,    defaultCamZ = 0.0,  defaultRoll = 0.0 },
 }
 
 -- Clothing Categories (componentId -> camera preset)
@@ -140,6 +162,49 @@ Customize.OverlayCategories = {
     -- Body overlays
     { overlayIndex = 10, label = 'Chest Hair',         camera = 'chest_overlay', visibleComponents = {0, 2, 3}, componentOverrides = {[3] = 15}, colorType = 1, colorId = 1 },
     { overlayIndex = 11, label = 'Body Blemishes',     camera = 'chest_overlay', visibleComponents = {0, 2, 3}, componentOverrides = {[3] = 15}, colorType = 1, colorId = 1 },
+}
+
+-- Tattoo Capture
+-- Tattoos are ped DECORATIONS applied by (collection, overlay) hash pairs — GTA has
+-- no native to list them, so the catalog is read at runtime from your tattoo/appearance
+-- resource's data file. Defaults match illenium-appearance's shared/tattoos.lua, whose
+-- format is: Config.Tattoos = { ZONE_X = { { name, label, hashMale, hashFemale, zone, collection }, ... } }.
+-- If the file/resource is missing the loader falls back to Customize.Tattoo.Manual below.
+Customize.Tattoo = {
+    Enabled        = true,
+    SourceResource = 'illenium-appearance',
+    SourceFile     = 'shared/tattoos.lua',  -- pure-data file that sets Config.Tattoos = {...}
+    SourceGlobal   = 'Tattoos',             -- read as env.Config[SourceGlobal]
+    OpacityStack   = true,                  -- re-apply (opacity*10) times like illenium, so thumbnails match in-game darkness
+    -- Fallback catalog if the source can't be read. Same shape as Config.Tattoos:
+    -- Manual = { ZONE_TORSO = { { name='TAT_X', label='X', hashMale='...', hashFemale='...', collection='mp..._overlays' } } },
+    Manual         = {},
+}
+
+-- Tattoo zones to expose (one capture sub-category each). The tattoo list per zone is
+-- pulled from the source above and matched by `zone`. Each entry controls framing + how
+-- the ped is stripped so the skin under the tattoo is visible:
+--   visibleComponents / componentOverrides -> same semantics as Customize.Categories
+--   componentOverrides[3]=15 = bare torso+arms skin (proven value used by Decals/Chest overlay).
+--   Component 4 (legs) must be an override to a visible skin/underwear drawable — NEVER -1 (that hides the legs).
+--   hideHead draws a chroma sphere over the head; it MUST stay false for ZONE_HEAD or head tattoos get wiped.
+-- These skin drawables are ped-dependent — adjust if your base ped renders clothed.
+--
+-- autoPick = { camA, camB, ... }: capture each tattoo from every listed camera and let the
+-- server keep whichever angle actually shows the ink (diffed against a bare-skin baseline).
+-- Used for the torso, where illenium folds front AND back tattoos into one ZONE_TORSO and
+-- they can't be told apart from the data. Costs one extra capture per tattoo per angle.
+-- Remove autoPick to go back to a single fixed angle.
+Customize.TattooCategories = {
+    { zone = 'ZONE_TORSO',     label = 'Torso & Back', camera = 'tattoo_torso',     visibleComponents = {3}, componentOverrides = {[3] = 15},            hideHead = true, autoPick = { 'tattoo_torso', 'tattoo_back' } },
+    { zone = 'ZONE_LEFT_ARM',  label = 'Left Arm',     camera = 'tattoo_arm_left',  visibleComponents = {3}, componentOverrides = {[3] = 15},            hideHead = true },
+    { zone = 'ZONE_RIGHT_ARM', label = 'Right Arm',    camera = 'tattoo_arm_right', visibleComponents = {3}, componentOverrides = {[3] = 15},            hideHead = true },
+    -- [4] = legs/pants. Set to minimal-coverage UNDERWEAR (not shorts) so the
+    -- thighs/calves stay bare for leg tattoos. The right drawable differs per ped
+    -- model, so it's a { male, female } pair — tune these two to your underwear item.
+    { zone = 'ZONE_LEFT_LEG',  label = 'Left Leg',     camera = 'tattoo_leg_left',  visibleComponents = {3}, componentOverrides = {[3] = 15, [4] = { male = 21, female = 15 }}, hideHead = true },
+    { zone = 'ZONE_RIGHT_LEG', label = 'Right Leg',    camera = 'tattoo_leg_right', visibleComponents = {3}, componentOverrides = {[3] = 15, [4] = { male = 21, female = 15 }}, hideHead = true },
+    { zone = 'ZONE_HEAD',      label = 'Head / Neck',  camera = 'tattoo_head',      visibleComponents = {0}, componentOverrides = {[3] = 15},            hideHead = false },
 }
 
 -- Vehicle Categories

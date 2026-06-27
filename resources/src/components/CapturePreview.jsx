@@ -10,7 +10,7 @@ import { FixedSizeGrid as Grid } from 'react-window'
 import {
   Eye, Camera, Check, Play, Search, X,
   Shirt, HardHat, Glasses, Watch, Footprints, ShoppingBag,
-  Shield, Paintbrush, Ear, Gem,
+  Shield, Paintbrush, Ear, Gem, PenTool,
   Car, Box, User, Palette, ChevronRight, ChevronDown, RotateCcw,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -31,15 +31,17 @@ export const CAT_ICON_MAP = {
   'Chest Hair': User, 'Body Blemishes': Paintbrush,
 }
 export const CAT_TYPE_ICON = {
-  'component': Shirt, 'prop': HardHat, 'overlay': Paintbrush, 'vehicle': Car, 'object': Box,
+  'component': Shirt, 'prop': HardHat, 'overlay': Paintbrush, 'vehicle': Car, 'object': Box, 'tattoo': PenTool,
 }
 
 // ── Tabs ────────────────────────────────────────────────
 const TABS = [
-  { id: 'ped',        label: 'Ped',        icon: User,       types: ['component', 'prop'] },
-  { id: 'appearance', label: 'Appearance', icon: Paintbrush, types: ['overlay'] },
-  { id: 'cars',       label: 'Cars',       icon: Car,        types: ['vehicle'] },
-  { id: 'objects',    label: 'Objects',    icon: Box,        types: ['object'] },
+  { id: 'ped',         label: 'Clothing',    icon: Shirt,      types: ['component'] },
+  { id: 'accessories', label: 'Accessories', icon: HardHat,    types: ['prop'] },
+  { id: 'appearance',  label: 'Appearance',  icon: Paintbrush, types: ['overlay'] },
+  { id: 'tattoos',     label: 'Tattoos',     icon: PenTool,    types: ['tattoo'] },
+  { id: 'cars',        label: 'Cars',        icon: Car,        types: ['vehicle'] },
+  { id: 'objects',     label: 'Objects',     icon: Box,        types: ['object'] },
 ]
 
 // ── Vehicle Colors ──────────────────────────────────────
@@ -96,9 +98,10 @@ const BrowseThumb = React.memo(({ item, isSelected, onClick, ext, recaptureMode,
   const thumbName = item.type === 'vehicle' ? `vehicles/${item.model || item.id}.${ext}`
     : item.type === 'object' ? `objects/${item.model || item.id}.${ext}`
     : item.type === 'overlay' ? `${item.gender}/overlay_${item.id}/${item.drawable}.${ext}`
+    : item.type === 'tattoo' ? `${item.gender}/tattoos/${item.name}.${ext}`
     : item.type === 'prop' ? `${item.gender}/prop_${item.id}/${item.drawable}${texSuffix}.${ext}`
     : `${item.gender}/${item.id}/${item.drawable}${texSuffix}.${ext}`
-  const displayLabel = item.model || `#${item.drawable}`
+  const displayLabel = item.model || (item.type === 'tattoo' ? item.label : `#${item.drawable}`)
 
   useEffect(() => {
     let c = false; setSrc(null); setError(false)
@@ -157,12 +160,18 @@ export function CapturePreview({
   const [activeKey, setActiveKey]       = useState(categories[0]?.key ?? null)
   const [selected, setSelected]         = useState(() => new Set())
   const [savedCameras, setSavedCameras] = useState(() => new Set())
+  // Force the capture to run on a clean mp_f_freemode_01 ped (default skin, no overlays),
+  // overriding the player's current gender / Customize.CaptureGenders for this run only.
+  const [forceFemale, setForceFemale]   = useState(false)
 
   const [pedSearch, setPedSearch]                   = useState('')
   const [expandedPedGroups, setExpandedPedGroups]   = useState(() => new Set(['components', 'props']))
 
   // ── Appearance tab state ──────────────────────────
   const [appearanceSearch, setAppearanceSearch] = useState('')
+
+  // ── Tattoos tab state ─────────────────────────────
+  const [tattooSearch, setTattooSearch] = useState('')
 
   // ── Cars tab state ────────────────────────────────
   const [expandedClasses, setExpandedClasses] = useState(() => new Set())
@@ -204,7 +213,12 @@ export function CapturePreview({
   }, [])
   const handleRecaptureStart = useCallback(() => {
     if (recaptureSet.size === 0) return
-    const items = Array.from(recaptureSet).map(k => { const p = k.split('-'); return { type: p[0], id: +p[1], drawable: +p[2], texture: +p[3] } })
+    const items = Array.from(recaptureSet).map(k => {
+      const p = k.split('-')
+      // Tattoo ids are zone strings (e.g. ZONE_TORSO) — keep them as strings; numeric ids stay numeric.
+      if (p[0] === 'tattoo') return { type: 'tattoo', id: p.slice(1, -2).join('-'), drawable: +p[p.length - 2], texture: +p[p.length - 1] }
+      return { type: p[0], id: +p[1], drawable: +p[2], texture: +p[3] }
+    })
     onRecapture?.(items); setRecaptureMode(false); setRecaptureSet(new Set())
   }, [recaptureSet, onRecapture])
 
@@ -222,7 +236,10 @@ export function CapturePreview({
 
   // ── Derived data ──────────────────────────────────
   const pedCategories = useMemo(() => categories.filter(c => c.type === 'component' || c.type === 'prop'), [categories])
+  const compCategories = useMemo(() => categories.filter(c => c.type === 'component'), [categories])
+  const propCategories = useMemo(() => categories.filter(c => c.type === 'prop'), [categories])
   const overlayCategories = useMemo(() => categories.filter(c => c.type === 'overlay'), [categories])
+  const tattooCategories = useMemo(() => categories.filter(c => c.type === 'tattoo'), [categories])
   const vehicleClasses = useMemo(() => categories.filter(c => c.type === 'vehicle' && c.models), [categories])
   const objectCategories = useMemo(() => categories.filter(c => c.type === 'object'), [categories])
 
@@ -252,17 +269,22 @@ export function CapturePreview({
 
   // Counts
   const pedSelectedCount = useMemo(() => pedCategories.filter(c => selected.has(c.key)).length, [pedCategories, selected])
+  const compSelectedCount = useMemo(() => compCategories.filter(c => selected.has(c.key)).length, [compCategories, selected])
+  const propSelectedCount = useMemo(() => propCategories.filter(c => selected.has(c.key)).length, [propCategories, selected])
   const overlaySelectedCount = useMemo(() => overlayCategories.filter(c => selected.has(c.key)).length, [overlayCategories, selected])
+  const tattooSelectedCount = useMemo(() => tattooCategories.filter(c => selected.has(c.key)).length, [tattooCategories, selected])
   const vehicleSelectedCount = selectedModels.size
   const objectSelectedCount = selectedObjects.size
-  const totalSelected = pedSelectedCount + overlaySelectedCount + vehicleSelectedCount + objectSelectedCount
+  const totalSelected = pedSelectedCount + overlaySelectedCount + tattooSelectedCount + vehicleSelectedCount + objectSelectedCount
 
   const tabCounts = useMemo(() => ({
-    ped: pedSelectedCount,
+    ped: compSelectedCount,
+    accessories: propSelectedCount,
     appearance: overlaySelectedCount,
+    tattoos: tattooSelectedCount,
     cars: vehicleSelectedCount,
     objects: objectSelectedCount,
-  }), [pedSelectedCount, overlaySelectedCount, vehicleSelectedCount, objectSelectedCount])
+  }), [compSelectedCount, propSelectedCount, overlaySelectedCount, tattooSelectedCount, vehicleSelectedCount, objectSelectedCount])
 
   // ── Ped handlers ──────────────────────────────────
   const handlePedToggle = useCallback((key) => {
@@ -281,11 +303,16 @@ export function CapturePreview({
     setSavedCameras(prev => { const n = new Set(prev); n.add(activeCat.camera); return n })
   }, [activeKey, categories, onSaveAngle])
 
-  const pedSelectAll  = useCallback(() => setSelected(prev => { const n = new Set(prev); pedCategories.forEach(c => n.add(c.key)); return n }), [pedCategories])
-  const pedSelectNone = useCallback(() => setSelected(prev => { const n = new Set(prev); pedCategories.forEach(c => n.delete(c.key)); return n }), [pedCategories])
+  const compSelectAll  = useCallback(() => setSelected(prev => { const n = new Set(prev); compCategories.forEach(c => n.add(c.key)); return n }), [compCategories])
+  const compSelectNone = useCallback(() => setSelected(prev => { const n = new Set(prev); compCategories.forEach(c => n.delete(c.key)); return n }), [compCategories])
+  const propSelectAll  = useCallback(() => setSelected(prev => { const n = new Set(prev); propCategories.forEach(c => n.add(c.key)); return n }), [propCategories])
+  const propSelectNone = useCallback(() => setSelected(prev => { const n = new Set(prev); propCategories.forEach(c => n.delete(c.key)); return n }), [propCategories])
 
   const overlaySelectAll  = useCallback(() => setSelected(prev => { const n = new Set(prev); overlayCategories.forEach(c => n.add(c.key)); return n }), [overlayCategories])
   const overlaySelectNone = useCallback(() => setSelected(prev => { const n = new Set(prev); overlayCategories.forEach(c => n.delete(c.key)); return n }), [overlayCategories])
+
+  const tattooSelectAll  = useCallback(() => setSelected(prev => { const n = new Set(prev); tattooCategories.forEach(c => n.add(c.key)); return n }), [tattooCategories])
+  const tattooSelectNone = useCallback(() => setSelected(prev => { const n = new Set(prev); tattooCategories.forEach(c => n.delete(c.key)); return n }), [tattooCategories])
 
   const togglePedGroup = useCallback((key) => {
     setExpandedPedGroups(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
@@ -327,6 +354,19 @@ export function CapturePreview({
   const objectSelectAll  = useCallback(() => setSelectedObjects(new Set(objectCategories.map(c => c.id))), [objectCategories])
   const objectSelectNone = useCallback(() => setSelectedObjects(new Set()), [])
 
+  // Select every wearable category at once (clothing + accessories + appearance +
+  // tattoos) so props/overlays can't be silently skipped. Vehicles/objects excluded
+  // — they're separate heavy batches with their own tabs.
+  const selectAllWearable = useCallback(() => {
+    setSelected(prev => {
+      const n = new Set(prev)
+      pedCategories.forEach(c => n.add(c.key))
+      overlayCategories.forEach(c => n.add(c.key))
+      tattooCategories.forEach(c => n.add(c.key))
+      return n
+    })
+  }, [pedCategories, overlayCategories, tattooCategories])
+
   // ── Camera save for vehicle/object ─────────────────
   const handleSaveEntityAngle = useCallback(() => {
     const cam = activeTab === 'cars' ? 'vehicle' : 'object'
@@ -348,12 +388,14 @@ export function CapturePreview({
     pedCategories.filter(c => selected.has(c.key)).forEach(c => chosen.push(c))
     // Overlay categories
     overlayCategories.filter(c => selected.has(c.key)).forEach(c => chosen.push(c))
+    // Tattoo zones
+    tattooCategories.filter(c => selected.has(c.key)).forEach(c => chosen.push(c))
     // Vehicle models
     if (selectedModels.size > 0) chosen.push({ type: 'vehicle', id: '__models__', models: Array.from(selectedModels) })
     // Object models
     if (selectedObjects.size > 0) chosen.push({ type: 'object', id: '__models__', models: Array.from(selectedObjects) })
-    onStart?.(chosen)
-  }, [pedCategories, overlayCategories, selected, selectedModels, selectedObjects, totalSelected, onStart])
+    onStart?.(chosen, { gender: forceFemale ? 'female' : null })
+  }, [pedCategories, overlayCategories, tattooCategories, selected, selectedModels, selectedObjects, totalSelected, forceFemale, onStart])
 
   const isBrowse = mode === 'browse'
 
@@ -393,8 +435,10 @@ export function CapturePreview({
               const isActive = activeTab === tab.id
               const count = tabCounts[tab.id] || 0
               const TabIcon = tab.icon
-              const hasItems = tab.id === 'ped' ? pedCategories.length > 0
+              const hasItems = tab.id === 'ped' ? compCategories.length > 0
+                : tab.id === 'accessories' ? propCategories.length > 0
                 : tab.id === 'appearance' ? overlayCategories.length > 0
+                : tab.id === 'tattoos' ? tattooCategories.length > 0
                 : tab.id === 'cars' ? vehicleClasses.length > 0
                 : objectCategories.length > 0
               if (!hasItems) return null
@@ -427,12 +471,16 @@ export function CapturePreview({
         <div style={{ height: 1, background: 'rgba(255,255,255,0.04)' }} />
 
         {/* ═══ PED TAB ═══ */}
-        {activeTab === 'ped' && (() => {
-          const compCats = pedCategories.filter(c => c.type === 'component')
-          const propCats = pedCategories.filter(c => c.type === 'prop')
+        {(activeTab === 'ped' || activeTab === 'accessories') && (() => {
+          const isAccessories = activeTab === 'accessories'
+          const tabCats       = isAccessories ? propCategories : compCategories
+          const tabSelCount   = tabCats.filter(c => selected.has(c.key)).length
+          const tabSelectAll  = isAccessories ? propSelectAll  : compSelectAll
+          const tabSelectNone = isAccessories ? propSelectNone : compSelectNone
           const pedGroups = [
-            { key: 'components', label: 'Clothing',    icon: Shirt, cats: compCats },
-            { key: 'props',      label: 'Accessories', icon: Gem,   cats: propCats },
+            isAccessories
+              ? { key: 'props',      label: 'Accessories', icon: HardHat, cats: tabCats }
+              : { key: 'components', label: 'Clothing',    icon: Shirt,   cats: tabCats },
           ].filter(g => g.cats.length > 0)
 
           return (
@@ -456,12 +504,12 @@ export function CapturePreview({
               {/* Count + All/None */}
               <div className="flex items-center justify-between" style={{ padding: '6px 20px 4px' }}>
                 <span style={{ fontSize: 10, color: '#555' }}>
-                  <span style={{ color: '#999', fontWeight: 600 }}>{pedSelectedCount}</span> / {pedCategories.length} categories
+                  <span style={{ color: '#999', fontWeight: 600 }}>{tabSelCount}</span> / {tabCats.length} categories
                 </span>
                 <div className="flex items-center gap-1.5">
-                  <button onClick={pedSelectAll} style={{ fontSize: 10, color: '#666', background: 'none', border: 'none', cursor: 'pointer' }}>All</button>
+                  <button onClick={tabSelectAll} style={{ fontSize: 10, color: '#666', background: 'none', border: 'none', cursor: 'pointer' }}>All</button>
                   <span style={{ fontSize: 10, color: '#333' }}>·</span>
-                  <button onClick={pedSelectNone} style={{ fontSize: 10, color: '#666', background: 'none', border: 'none', cursor: 'pointer' }}>None</button>
+                  <button onClick={tabSelectNone} style={{ fontSize: 10, color: '#666', background: 'none', border: 'none', cursor: 'pointer' }}>None</button>
                 </div>
               </div>
 
@@ -606,6 +654,89 @@ export function CapturePreview({
                           {!isBrowse && (
                             <span style={{ fontSize: 8, color: '#444', fontVariantNumeric: 'tabular-nums' }}>
                               ID {cat.id}
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </ScrollArea>
+              </div>
+
+              {/* Save angle button */}
+              {!isBrowse && (
+                <div style={{ padding: '6px 20px 10px' }}>
+                  <button onClick={handleSaveAngle}
+                    className="flex items-center justify-center gap-1.5 w-full"
+                    style={{ height: 28, borderRadius: 6, fontSize: 10, fontWeight: 600, color: '#888', background: bg(0.02), border: border(0.06), cursor: 'pointer' }}>
+                    <Camera style={{ width: 9, height: 9 }} />
+                    Save Camera Angle
+                  </button>
+                </div>
+              )}
+            </>
+          )
+        })()}
+
+        {/* ═══ TATTOOS TAB ═══ */}
+        {activeTab === 'tattoos' && (() => {
+          const filteredTattoos = tattooSearch.trim()
+            ? tattooCategories.filter(c => c.label.toLowerCase().includes(tattooSearch.trim().toLowerCase()))
+            : tattooCategories
+
+          return (
+            <>
+              {/* Search */}
+              <div style={{ padding: '8px 20px 6px' }}>
+                <div className="flex items-center gap-2" style={{ height: 28, borderRadius: 6, padding: '0 8px', background: bg(0.015), border: border(0.04) }}>
+                  <Search style={{ width: 10, height: 10, color: '#444', flexShrink: 0 }} />
+                  <input value={tattooSearch} onChange={e => setTattooSearch(e.target.value)}
+                    placeholder="Search zones..." style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 10, color: '#ccc', caretColor: '#888' }} />
+                  {tattooSearch && (
+                    <button onClick={() => setTattooSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}>
+                      <X style={{ width: 9, height: 9, color: '#555' }} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ height: 1, background: 'rgba(255,255,255,0.04)' }} />
+
+              {/* Count + All/None */}
+              <div className="flex items-center justify-between" style={{ padding: '6px 20px 4px' }}>
+                <span style={{ fontSize: 10, color: '#555' }}>
+                  <span style={{ color: '#999', fontWeight: 600 }}>{tattooSelectedCount}</span> / {tattooCategories.length} zones
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button onClick={tattooSelectAll} style={{ fontSize: 10, color: '#666', background: 'none', border: 'none', cursor: 'pointer' }}>All</button>
+                  <span style={{ fontSize: 10, color: '#333' }}>·</span>
+                  <button onClick={tattooSelectNone} style={{ fontSize: 10, color: '#666', background: 'none', border: 'none', cursor: 'pointer' }}>None</button>
+                </div>
+              </div>
+
+              {/* Zone list */}
+              <div className={isBrowse ? 'flex-1 overflow-hidden' : ''} style={{ padding: '2px 20px 10px' }}>
+                <ScrollArea style={{ height: isBrowse ? '100%' : 240 }}>
+                  <div className="flex flex-col gap-0.5">
+                    {filteredTattoos.map(cat => {
+                      const isOn = selected.has(cat.key)
+                      const isSaved = savedCameras.has(cat.camera)
+                      const CatIcon = CAT_ICON_MAP[cat.label] ?? PenTool
+                      return (
+                        <div key={cat.key}
+                          onClick={() => handleRowClick(cat)}
+                          className="flex items-center gap-2 cursor-pointer select-none transition-all hover:opacity-100"
+                          style={{ height: 28, padding: '0 8px', borderRadius: 5, opacity: isOn ? 1 : 0.5,
+                            background: activeKey === cat.key ? bg(0.04) : 'transparent',
+                            border: activeKey === cat.key ? border(0.08) : '1px solid transparent',
+                          }}>
+                          <Checkbox checked={isOn} onChange={() => handlePedToggle(cat.key)} size={13} />
+                          <CatIcon style={{ width: 10, height: 10, color: '#666', flexShrink: 0 }} />
+                          <span className="flex-1 truncate" style={{ fontSize: 10, fontWeight: 500, color: '#ccc' }}>{cat.label}</span>
+                          {isSaved && <Camera style={{ width: 8, height: 8, color: '#22c55e', flexShrink: 0 }} />}
+                          {!isBrowse && cat.drawables != null && (
+                            <span style={{ fontSize: 8, color: '#444', fontVariantNumeric: 'tabular-nums' }}>
+                              {cat.drawables}
                             </span>
                           )}
                         </div>
@@ -816,10 +947,25 @@ export function CapturePreview({
         {/* ═══ FOOTER ═══ */}
         <div style={{ height: 1, background: 'rgba(255,255,255,0.04)' }} />
         {!isBrowse ? (
+        <>
+          {/* Capture-as-female toggle — forces a clean mp_f_freemode_01 ped for this run */}
+          <div className="flex items-center justify-between" style={{ padding: '9px 20px 0' }}
+            title="Capture clothing, accessories, appearance & tattoos on a clean female ped (mp_f_freemode_01, default skin), ignoring your current character. Vehicles/objects are unaffected.">
+            <div className="flex items-center gap-1.5">
+              <User style={{ width: 11, height: 11, color: forceFemale ? '#f0abfc' : '#555', flexShrink: 0 }} />
+              <span style={{ fontSize: 10, fontWeight: 500, color: forceFemale ? '#ccc' : '#666' }}>Capture as female</span>
+            </div>
+            <Switch size="sm" checked={forceFemale} onCheckedChange={setForceFemale} />
+          </div>
           <div className="flex items-center justify-between" style={{ padding: '12px 20px 14px' }}>
             <button onClick={onCancel} className="transition-colors hover:bg-white/[0.03]"
               style={{ width: 64, height: 28, fontSize: 10, fontWeight: 500, color: '#666', background: 'transparent', border: border(), borderRadius: 5, cursor: 'pointer' }}>
               Cancel
+            </button>
+            <button onClick={selectAllWearable} title="Select all clothing, accessories, appearance & tattoos"
+              className="transition-colors hover:bg-white/[0.04]"
+              style={{ height: 28, padding: '0 8px', fontSize: 10, fontWeight: 600, color: '#888', background: 'transparent', border: border(0.06), borderRadius: 5, cursor: 'pointer' }}>
+              + Everything
             </button>
             {totalSelected > 0 && <span style={{ fontSize: 10, color: '#555' }}>{totalSelected} item{totalSelected !== 1 ? 's' : ''}</span>}
             <button onClick={handleStart} disabled={totalSelected === 0} className="transition-all"
@@ -827,6 +973,7 @@ export function CapturePreview({
               Start
             </button>
           </div>
+        </>
         ) : null}
       </div>
     </div>

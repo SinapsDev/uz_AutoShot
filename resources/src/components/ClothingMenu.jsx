@@ -28,9 +28,10 @@ const Thumbnail = React.memo(({ item, isSelected, onClick, ext, recaptureMode, r
   const thumbName = item.type === 'vehicle' ? `vehicles/${item.model || item.id}.${ext}`
     : item.type === 'object' ? `objects/${item.model || item.id}.${ext}`
     : item.type === 'overlay' ? `${item.gender}/overlay_${item.id}/${item.drawable}.${ext}`
+    : item.type === 'tattoo' ? `${item.gender}/tattoos/${item.name}.${ext}`
     : item.type === 'prop' ? `${item.gender}/prop_${item.id}/${item.drawable}${texSuffix}.${ext}`
     : `${item.gender}/${item.id}/${item.drawable}${texSuffix}.${ext}`
-  const displayLabel = item.model || `#${item.drawable}`
+  const displayLabel = item.model || (item.type === 'tattoo' ? item.label : `#${item.drawable}`)
 
   useEffect(() => {
     let c = false; setSrc(null); setError(false)
@@ -107,7 +108,12 @@ export function ClothingMenu({
   }, [])
   const handleRecaptureStart = useCallback(() => {
     if (recaptureSet.size === 0) return
-    const items = Array.from(recaptureSet).map(k => { const p = k.split('-'); return { type: p[0], id: +p[1], drawable: +p[2], texture: +p[3] } })
+    const items = Array.from(recaptureSet).map(k => {
+      const p = k.split('-')
+      // Tattoo ids are zone strings (e.g. ZONE_TORSO) — keep them as strings; numeric ids stay numeric.
+      if (p[0] === 'tattoo') return { type: 'tattoo', id: p.slice(1, -2).join('-'), drawable: +p[p.length - 2], texture: +p[p.length - 1] }
+      return { type: p[0], id: +p[1], drawable: +p[2], texture: +p[3] }
+    })
     onRecapture?.(items); setRecaptureMode(false); setRecaptureSet(new Set())
   }, [recaptureSet, onRecapture])
 

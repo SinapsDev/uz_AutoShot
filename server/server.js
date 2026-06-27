@@ -318,6 +318,136 @@ onNet('uz_autoshot:server:processCapture', (payload) => {
     }
 });
 
+// ════════════════════════════════════════════════════════
+// AUTO FRONT/BACK TATTOO PICKING
+// Tattoos that share a zone (e.g. torso front vs back) get captured from multiple camera
+// angles. We keep whichever angle shows the most "ink" — measured as the pixel difference
+// from a bare-skin baseline taken at the same angle.
+// ════════════════════════════════════════════════════════
+
+const tattooBaselines = {};  // key: `${src}|${angleKey}` -> chroma-processed PNG Buffer
+
+function processFrame(imageData, transparent, chromaKey) {
+    let buf = Buffer.from(stripDataUri(imageData), 'base64');
+    if (!buf || buf.length === 0) return null;
+    if (transparent) {
+        try { buf = removeChromaKey(buf, chromaKey); } catch (e) { /* fall back to raw frame */ }
+    }
+    return buf;
+}
+
+// Count opaque pixels where the candidate differs from the baseline beyond a threshold.
+// Both frames are the same pose/angle, so the only real difference is the tattoo ink.
+function inkScore(candBuf, baseBuf) {
+    let a, b;
+    try { a = PNG.sync.read(candBuf); b = PNG.sync.read(baseBuf); }
+    catch (e) { return -1; }
+    if (a.width !== b.width || a.height !== b.height) return -1;
+    const da = a.data, db = b.data;
+    let score = 0;
+    for (let i = 0; i < da.length; i += 4) {
+        if (da[i + 3] < 20) continue;  // ignore off-body (transparent) pixels
+        const d = Math.abs(da[i] - db[i]) + Math.abs(da[i + 1] - db[i + 1]) + Math.abs(da[i + 2] - db[i + 2]);
+        if (d > 40) score++;
+    }
+    return score;
+}
+
+onNet('uz_autoshot:server:processTattooBaseline', (payload) => {
+    const src = source;
+    if (!checkAce(src)) return;
+    if (!payload || typeof payload !== 'object') return;
+
+    const angleKey  = typeof payload.angleKey === 'string' ? payload.angleKey : '';
+    const chromaKey  = typeof payload.chromaKey === 'string' ? payload.chromaKey.toLowerCase() : 'green';
+    const transp     = payload.transparent === true || payload.transparent === '1' || payload.transparent === 1;
+    const imageData  = payload.imageData;
+
+    if (!angleKey || typeof imageData !== 'string' || imageData.length === 0) return;
+    if (imageData.length > Math.ceil(MAX_PAYLOAD_BYTES * 4 / 3) + 64) return;
+
+    try {
+        const buf = processFrame(imageData, transp, chromaKey);
+        if (buf) {
+            tattooBaselines[src + '|' + angleKey] = buf;
+            console.log('^2[uz_AutoShot]^0 Tattoo baseline cached: ' + angleKey + ' (player ' + src + ')');
+        }
+    } catch (err) {
+        console.log('^3[uz_AutoShot]^0 Baseline error: ' + (err && err.message ? err.message : err));
+    }
+});
+
+onNet('uz_autoshot:server:processTattooAuto', (payload) => {
+    const src = source;
+    if (!checkAce(src)) {
+        console.log('^1[uz_AutoShot]^0 Refused tattoo capture: player ' + src + ' lacks ' + ACE_NAME);
+        return;
+    }
+    if (!payload || typeof payload !== 'object') return;
+
+    const xFilename  = typeof payload.filename === 'string' ? payload.filename : '';
+    const wantFormat = typeof payload.format === 'string' ? payload.format.toLowerCase() : 'png';
+    const wantTransp = payload.transparent === true || payload.transparent === '1' || payload.transparent === 1;
+    const chromaKey  = typeof payload.chromaKey === 'string' ? payload.chromaKey.toLowerCase() : 'green';
+    const wantWidth  = parseInt(payload.width)  || 0;
+    const wantHeight = parseInt(payload.height) || 0;
+    const angles     = Array.isArray(payload.angles) ? payload.angles : [];
+
+    if (!xFilename || /[\\/]\.\.(?:[\\/]|$)/.test(xFilename) || path.isAbsolute(xFilename)) {
+        console.log('^1[uz_AutoShot]^0 Refused tattoo capture: invalid filename: ' + xFilename);
+        return;
+    }
+    if (angles.length === 0) return;
+
+    try {
+        let best = null;  // { score, data, key } — angle with the most ink wins; ties keep the first (front)
+        for (const a of angles) {
+            if (!a || typeof a.imageData !== 'string' || a.imageData.length === 0) continue;
+            if (a.imageData.length > Math.ceil(MAX_PAYLOAD_BYTES * 4 / 3) + 64) continue;
+            const key       = typeof a.key === 'string' ? a.key : '';
+            const processed = processFrame(a.imageData, wantTransp, chromaKey);
+            if (!processed) continue;
+            let score = 0;
+            const base = tattooBaselines[src + '|' + key];
+            if (base) {
+                const s = inkScore(processed, base);
+                if (s > 0) score = s;
+            }
+            if (!best || score > best.score) best = { score: score, data: processed, key: key };
+        }
+        if (!best) {
+            console.log('^3[uz_AutoShot]^0 Tattoo auto: no usable frame for ' + xFilename);
+            return;
+        }
+
+        let outputData = best.data;
+        const ext = wantTransp ? 'png' : wantFormat;
+
+        if (wantWidth > 0 && wantHeight > 0 && ext === 'png') {
+            const MAX_DIM = 4096;
+            const cw = Math.min(Math.max(wantWidth, 16), MAX_DIM);
+            const ch = Math.min(Math.max(wantHeight, 16), MAX_DIM);
+            try { outputData = resizePNG(outputData, cw, ch); } catch (e) {
+                console.log('^3[uz_AutoShot]^0 Resize skipped: ' + e.message);
+            }
+        }
+
+        const outputPath = path.resolve(path.join(OUTPUT_DIR, xFilename + '.' + ext));
+        if (!outputPath.startsWith(OUTPUT_DIR + path.sep)) {
+            console.log('^1[uz_AutoShot]^0 Refused tattoo capture: path traversal blocked for ' + xFilename);
+            return;
+        }
+
+        const dir = path.dirname(outputPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(outputPath, outputData);
+
+        console.log('^2[uz_AutoShot]^0 Saved (auto-angle ' + best.key + ', ink ' + best.score + '): ' + xFilename + '.' + ext);
+    } catch (err) {
+        console.log('^1[uz_AutoShot]^0 Tattoo auto process error: ' + (err && err.message ? err.message : err));
+    }
+});
+
 onNet('uz_autoshot:server:setBucket', (bucket) => {
     const src = source;
     if (!checkAce(src)) {
@@ -335,6 +465,11 @@ onNet('uz_autoshot:server:resetBucket', () => {
         return;
     }
     SetPlayerRoutingBucket(src.toString(), 0);
+    // Drop this player's cached tattoo baselines — they're only valid for one capture session.
+    const prefix = src + '|';
+    for (const k of Object.keys(tattooBaselines)) {
+        if (k.startsWith(prefix)) delete tattooBaselines[k];
+    }
     console.log('^2[uz_AutoShot]^0 Player ' + src + ' -> bucket 0');
 });
 

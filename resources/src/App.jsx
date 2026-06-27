@@ -135,6 +135,11 @@ export default function App() {
       })
     } else if (cat.type === 'object') {
       arr.push({ type: cat.type, id: cat.id, gender: 'unisex', drawable: 0, texture: 0, label: cat.label, model: cat.id })
+    } else if (cat.type === 'tattoo' && cat.tattoos) {
+      // index-aligned with the client's catalog cache so preview/browse/recapture resolve by zone+index
+      cat.tattoos.forEach((t, idx) => {
+        arr.push({ type: 'tattoo', id: cat.id, gender, drawable: idx, texture: 0, label: t.label, name: t.name })
+      })
     } else {
       for (let d = 0; d < cat.drawables; d++)
         arr.push({ type: cat.type, id: cat.id, gender, drawable: d, texture: 0, label: cat.label })
@@ -188,17 +193,18 @@ export default function App() {
     fetchNUI('cancelPreview')
   }, [])
 
-  const handlePreviewStart = useCallback((chosen) => {
+  const handlePreviewStart = useCallback((chosen, opts = {}) => {
     const sc = chosen.filter(c => c.type === 'component').map(c => c.id)
     const sp = chosen.filter(c => c.type === 'prop').map(c => c.id)
     const sl = chosen.filter(c => c.type === 'overlay').map(c => c.id)
+    const st = chosen.filter(c => c.type === 'tattoo').map(c => c.id)  // zone ids
     // Vehicles/objects now send individual model name arrays
     const vehEntry = chosen.find(c => c.type === 'vehicle' && c.models)
     const objEntry = chosen.find(c => c.type === 'object' && c.models)
     const sv = vehEntry?.models || []
     const so = objEntry?.models || []
     setPreviewing(false)
-    fetchNUI('startCapture', { selectedComponents: sc, selectedProps: sp, selectedOverlays: sl, selectedVehicles: sv, selectedObjects: so })
+    fetchNUI('startCapture', { selectedComponents: sc, selectedProps: sp, selectedOverlays: sl, selectedTattoos: st, selectedVehicles: sv, selectedObjects: so, gender: opts.gender || null })
   }, [])
 
   const handlePreviewActiveChange = useCallback((cat) => {
@@ -382,6 +388,7 @@ export default function App() {
       icon: CAT_ICON_MAP[cat.label] ?? CAT_TYPE_ICON[cat.type] ?? Shirt,
       type: cat.type, id: cat.id, camera: cat.camera,
       models: cat.models, category: cat.category,
+      tattoos: cat.tattoos, drawables: cat.drawables,
     }))
     return (
       <div className="fixed inset-0 z-[9998] cursor-grab active:cursor-grabbing"
