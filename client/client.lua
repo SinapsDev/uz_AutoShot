@@ -460,12 +460,36 @@ local function GrabScreenshot()
     return base64
 end
 
+-- The server processes one upload at a time and acks when the file is written. Hold
+-- the next upload until that ack so the frames can't pile up faster than the server
+-- writes them — an unbounded backlog is what stalls the server mid-run.
+local uploadPending = false
+
+RegisterNetEvent('uz_autoshot:client:uploadDone', function()
+    uploadPending = false
+end)
+
+local function WaitForUploadSlot()
+    if not uploadPending then return end
+
+    local deadline = GetGameTimer() + (Customize.UploadAckTimeout or 60000)
+    while uploadPending and not isCancelled and GetGameTimer() < deadline do Wait(50) end
+
+    if uploadPending then
+        uploadPending = false
+        print('^3[uz_AutoShot]^0 Previous upload was not confirmed in time; continuing')
+    end
+end
+
 local function CaptureAndUpload(filename)
     local base64 = GrabScreenshot()
     if not base64 then
         print('^3[uz_AutoShot]^0 Capture skipped (' .. filename .. '): empty screenshot')
         return
     end
+
+    WaitForUploadSlot()
+    uploadPending = true
 
     TriggerLatentServerEvent('uz_autoshot:server:processCapture', Customize.LatentRate or 8000000, {
         filename    = filename,
@@ -481,10 +505,15 @@ end
 -- Upload a bare-skin baseline frame (no tattoo) for an angle, so the server can later
 -- diff each tattoo's candidate frames against it and detect which angle shows the ink.
 local function UploadTattooBaseline(angleKey, base64)
+    WaitForUploadSlot()
+    uploadPending = true
+
     TriggerLatentServerEvent('uz_autoshot:server:processTattooBaseline', Customize.LatentRate or 8000000, {
         angleKey    = angleKey,
         transparent = Customize.TransparentBg and true or false,
         chromaKey   = Customize.ChromaKeyColor or 'green',
+        width       = Customize.ScreenshotWidth or 0,
+        height      = Customize.ScreenshotHeight or 0,
         imageData   = base64,
     })
 end
@@ -492,6 +521,9 @@ end
 -- Upload a tattoo captured from multiple angles; the server keeps the angle with the most
 -- ink (largest diff vs that angle's baseline) and writes it to `filename`.
 local function UploadTattooAuto(filename, angles)
+    WaitForUploadSlot()
+    uploadPending = true
+
     TriggerLatentServerEvent('uz_autoshot:server:processTattooAuto', Customize.LatentRate or 8000000, {
         filename    = filename,
         format      = Customize.ScreenshotFormat or 'png',
