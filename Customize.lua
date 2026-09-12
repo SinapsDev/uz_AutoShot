@@ -38,6 +38,9 @@ Customize.GCInterval        = 20
 Customize.LatentRate        = 8000000       -- bytes/sec for capture upload (latent event throttle).
                                             -- 8 MB/s is plenty for 512x512; raise for 4K source frames
                                             -- (e.g. 16000000 = 16 MB/s) if uploads bottleneck the queue.
+Customize.UploadAckTimeout  = 60000         -- ms to wait for the server to confirm an upload before
+                                            -- moving on. Captures are held until the previous frame
+                                            -- is written, so a slow server never builds a backlog.
 
 -- Chroma Key Screen
 Customize.ChromaKeyColor    = 'magenta'          -- 'green' | 'magenta'
