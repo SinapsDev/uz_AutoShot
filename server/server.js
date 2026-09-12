@@ -1,5 +1,6 @@
 const path = require('path');
 const fs   = require('fs');
+const fsp  = fs.promises;
 const { PNG } = require('pngjs');
 
 const RESOURCE   = GetCurrentResourceName();
@@ -34,12 +35,27 @@ function checkAce(src) {
 const ROWS_PER_SLICE = 64;
 const nextTick = () => new Promise((resolve) => setImmediate(resolve));
 
+// pngjs's sync codec inflates and deflates on the calling thread, so a full-resolution
+// source frame decodes with zero ticks in between — the one block left that the row
+// slicing above cannot break up. The stream API runs zlib on the libuv pool and delivers
+// the result in chunks, so the server keeps ticking through a decode.
 function decodeFrame(buf) {
-    return PNG.sync.read(buf);
+    return new Promise((resolve, reject) => {
+        new PNG().parse(buf, (err, png) => (err ? reject(err) : resolve(png)));
+    });
 }
 
 function encodeFrame(png) {
-    return PNG.sync.write(png, { colorType: 6 });
+    return new Promise((resolve, reject) => {
+        const out = new PNG({ width: png.width, height: png.height, colorType: 6 });
+        out.data = png.data;
+        out.gamma = png.gamma;
+        const chunks = [];
+        out.on('data', (chunk) => chunks.push(chunk));
+        out.on('end', () => resolve(Buffer.concat(chunks)));
+        out.on('error', reject);
+        out.pack();
+    });
 }
 
 async function applyChromaKey(png, mode) {
@@ -300,7 +316,7 @@ async function buildFrame(imageData, transparent, chromaKey, wantWidth, wantHeig
     const raw = Buffer.from(stripDataUri(imageData), 'base64');
     if (!raw || raw.length === 0) return null;
 
-    let png = decodeFrame(raw);
+    let png = await decodeFrame(raw);
     if (transparent) await applyChromaKey(png, chromaKey);
     if (wantWidth > 0 && wantHeight > 0) {
         png = await resizeFrame(png, clampDim(wantWidth), clampDim(wantHeight));
@@ -315,10 +331,9 @@ function safeOutputPath(xFilename, ext) {
     return outputPath;
 }
 
-function writeOutput(outputPath, data) {
-    const dir = path.dirname(outputPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(outputPath, data);
+async function writeOutput(outputPath, data) {
+    await fsp.mkdir(path.dirname(outputPath), { recursive: true });
+    await fsp.writeFile(outputPath, data);
 }
 
 // ════════════════════════════════════════════════════════
@@ -423,7 +438,7 @@ onNet('uz_autoshot:server:processCapture', (payload) => {
                 console.log('^1[uz_AutoShot]^0 Refused capture: invalid base64 for ' + xFilename);
                 return;
             }
-            outputData = encodeFrame(png);
+            outputData = await encodeFrame(png);
         } else {
             outputData = Buffer.from(stripDataUri(imageData), 'base64');
             if (!outputData || outputData.length === 0) {
@@ -438,7 +453,7 @@ onNet('uz_autoshot:server:processCapture', (payload) => {
             return;
         }
 
-        writeOutput(outputPath, outputData);
+        await writeOutput(outputPath, outputData);
 
         const sizeKB = Math.round(outputData.length / 1024);
         const label = wantTransp ? 'bg removed' : ext;
@@ -563,7 +578,7 @@ onNet('uz_autoshot:server:processTattooAuto', (payload) => {
             return;
         }
 
-        writeOutput(outputPath, encodeFrame(best.png));
+        await writeOutput(outputPath, await encodeFrame(best.png));
         console.log('^2[uz_AutoShot]^0 Saved (auto-angle ' + best.key + ', ink ' + best.score + '): ' + xFilename + '.' + ext);
     });
 });
